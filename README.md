@@ -1,5 +1,7 @@
 # CaseDesk · 企业售后工单 Agent
 
+[![CaseDesk checks](https://github.com/1766421040-ux/casedesk-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/1766421040-ux/casedesk-agent/actions/workflows/ci.yml)
+
 **证据先行，操作有界，决策留痕。**
 
 CaseDesk 将售后问题变成可以复核的处理方案：检索规则、查询订单、生成带引用的提案，由独立审批人确认后写入模拟退款账本。它是面向 Agent 应用工程的完整本地作品，包含 React 工作台、FastAPI 服务、LangGraph 流程、数据库、测试与部署文件。
@@ -40,7 +42,7 @@ cd ..
 bash scripts/dev.sh
 ```
 
-打开 **http://127.0.0.1:5173**。API 文档位于 http://127.0.0.1:8000/docs 。按 Ctrl+C 停止前后端。脚本不会清除数据库。Windows 可以在两个终端分别启动 `uvicorn` 与 `npm run dev`，具体见 [后端说明](backend/README.md)。
+打开 [本地工作台](http://127.0.0.1:5173)。API 文档位于 [Swagger UI](http://127.0.0.1:8000/docs)。按 Ctrl+C 停止前后端。脚本不会清除数据库。Windows 可以在两个终端分别启动 `uvicorn` 与 `npm run dev`，具体见 [后端说明](backend/README.md)。
 
 | 身份 | 账号 | 密码 |
 |---|---|---|
@@ -94,7 +96,7 @@ bash scripts/dev.sh
 docker compose up --build
 ```
 
-访问 http://127.0.0.1:8080 。Nginx 提供静态前端和 `/api` 反向代理，后端单 worker，SQLite 存放在命名 volume。可复制 `.env.example` 为 `.env` 后配置模型。Docker 文件已提供；本机没有 Docker，发布前本地验证不包含镜像构建，CI 负责镜像构建检查。
+访问 [Docker 工作台](http://127.0.0.1:8080)。Nginx 提供静态前端和 `/api` 反向代理，后端单 worker，SQLite 存放在命名 volume。可复制 `.env.example` 为 `.env` 后配置模型。[首次 GitHub CI](https://github.com/1766421040-ux/casedesk-agent/actions/runs/40264557555) 的应用测试与两个 Docker 镜像构建均已通过。本地未运行 Docker 容器，镜像构建成功不等于生产部署验收。
 
 ## 架构与限制
 

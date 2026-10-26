@@ -61,11 +61,14 @@ def evaluate(cases, settings):
                 "runStatus": run["status"], "runId": run["id"], "localElapsedMs": elapsed_ms,
                 "answer": run["answer"], "proposal": run["proposal"], "evidenceIds": sorted(evidence_ids),
                 "steps": [{"name": step["name"], "status": step["status"]} for step in run["steps"]],
+                "terminationReason": run.get("terminationReason"),
+                "metrics": run.get("metrics"),
+                "toolCalls": [{"id": entry["id"], "name": entry["name"], "source": entry["source"], "status": entry["status"]} for entry in run.get("toolCalls", [])],
                 "error": run["error"],
             })
         totals = client.get("/api/stats", headers=headers).json()
     return {
-        "schemaVersion": 1, "executedAt": datetime.now(timezone.utc).isoformat(),
+        "schemaVersion": 2, "executedAt": datetime.now(timezone.utc).isoformat(),
         "evaluationType": "synthetic-engineering-regression",
         "provider": settings.provider, "model": settings.model_name if settings.provider != "demo" else None,
         "disclaimer": "合成场景上的工程回归。demo 为确定性规则，不代表真实模型效果；本报告不是生产安全审计、负载测试或模型质量基准。",

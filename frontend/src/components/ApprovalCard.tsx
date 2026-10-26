@@ -26,14 +26,28 @@ export function ApprovalCard({
   const [reason, setReason] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [relatedTicket, setRelatedTicket] = useState<Ticket | undefined>(
+    ticket,
+  );
   const [run, setRun] = useState<Run | null>(null);
   const [evidenceLoading, setEvidenceLoading] = useState(true);
+  const [attempt, setAttempt] = useState(0);
   const keys = useRef<Record<string, string>>({});
   useEffect(() => {
     let active = true;
-    api<{ run: Run }>(`/runs/${a.runId}`, token)
-      .then((r) => {
-        if (active) setRun(r.run);
+    setEvidenceLoading(true);
+    setError("");
+    Promise.all([
+      api<{ run: Run }>(`/runs/${a.runId}`, token),
+      ticket
+        ? Promise.resolve({ ticket })
+        : api<{ ticket: Ticket }>(`/tickets/${a.ticketId}`, token),
+    ])
+      .then(([r, t]) => {
+        if (active) {
+          setRun(r.run);
+          setRelatedTicket(t.ticket);
+        }
       })
       .catch((e) => {
         if (active) setError(e.message);
@@ -44,7 +58,7 @@ export function ApprovalCard({
     return () => {
       active = false;
     };
-  }, [a.runId, token]);
+  }, [a.runId, token, attempt]);
   async function submit(decision: "approve" | "reject") {
     setBusy(true);
     setError("");
@@ -66,9 +80,9 @@ export function ApprovalCard({
         </span>
         <Badge status={a.status} />
       </header>
-      <h2>{ticket?.subject || a.ticketId}</h2>
+      <h2>{relatedTicket?.subject || a.ticketId}</h2>
       <span className="muted">
-        {ticket?.customerName} · {ticket?.orderId}
+        {relatedTicket?.customerName} · {relatedTicket?.orderId}
       </span>
       <div className="approval-amount">
         <span>申请模拟退款</span>
@@ -84,7 +98,7 @@ export function ApprovalCard({
         {run?.evidence.map((e) => (
           <div key={e.chunkId}>
             <strong>
-              {e.title} · {e.version}
+              {e.title} · v{e.version}
             </strong>
             <p>{e.text}</p>
           </div>
@@ -96,8 +110,9 @@ export function ApprovalCard({
             审批意见
             <textarea
               aria-label={`审批意见 ${a.id}`}
-              placeholder="说明批准或拒绝的依据（必填）"
+              placeholder="说明批准或拒绝的依据（至少 3 个字）"
               value={reason}
+              minLength={3}
               maxLength={1000}
               onChange={(e) => setReason(e.target.value)}
               rows={2}
@@ -107,7 +122,7 @@ export function ApprovalCard({
             <button
               className="secondary danger"
               onClick={() => void submit("reject")}
-              disabled={busy || !reason.trim()}
+              disabled={busy || reason.trim().length < 3}
             >
               <X size={16} />
               拒绝方案
@@ -115,7 +130,9 @@ export function ApprovalCard({
             <button
               className="primary"
               onClick={() => void submit("approve")}
-              disabled={busy || !reason.trim() || !run || evidenceLoading}
+              disabled={
+                busy || reason.trim().length < 3 || !run || evidenceLoading
+              }
             >
               {busy ? (
                 <LoaderCircle size={16} className="spin" />
@@ -141,6 +158,14 @@ export function ApprovalCard({
       {error && (
         <div className="error" role="alert">
           {error}
+          {!run && (
+            <button
+              className="text-button"
+              onClick={() => setAttempt((x) => x + 1)}
+            >
+              重新读取证据
+            </button>
+          )}
         </div>
       )}
       <footer>

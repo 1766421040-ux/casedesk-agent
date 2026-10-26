@@ -1961,3 +1961,238 @@ strong {
 .badge {
   font-size: 10px;
 }
+
+/* Revision-aware operations and readable execution records. */
+.workspace-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -6px 0 18px;
+  color: #596b67;
+  font-size: 12px;
+}
+.workspace-toolbar .text-button {
+  flex-shrink: 0;
+}
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 18px;
+  border-top: 1px solid #e4ebe7;
+  font-size: 12px;
+  color: #586c65;
+}
+.pagination > div {
+  display: flex;
+  gap: 8px;
+}
+.ticket-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 26px;
+  border-bottom: 1px solid #edf1ee;
+}
+.ticket-actions > span {
+  margin-right: auto;
+  font-size: 11px;
+  color: #647770;
+}
+.ticket-actions .text-button {
+  font-size: 12px;
+}
+.ticket-history {
+  margin: 0 26px;
+  padding: 13px 0;
+  border-bottom: 1px solid #edf1ee;
+}
+.ticket-history > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #526b61;
+  cursor: pointer;
+  font-size: 12px;
+}
+.ticket-history ol {
+  list-style: none;
+  padding: 0 0 0 12px;
+  margin: 16px 0 0;
+  border-left: 2px solid #e1ece5;
+  max-height: 340px;
+  overflow-y: auto;
+}
+.ticket-history li {
+  padding: 0 0 16px 8px;
+  font-size: 12px;
+}
+.ticket-history li > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ticket-history li span {
+  font-size: 11px;
+  color: #6b7b74;
+}
+.ticket-history li p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+}
+.ticket-history li summary {
+  cursor: pointer;
+  margin-top: 7px;
+  color: #62766d;
+}
+.form-help {
+  font-size: 12px;
+  color: #61726b;
+  line-height: 1.8;
+  margin: 0 0 16px;
+}
+textarea[readonly] {
+  background: #f3f6f4;
+  color: #61726b;
+}
+.knowledge-actions {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin: 18px 0;
+}
+.version-history {
+  background: #f6f8f7;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+.version-history summary {
+  font-size: 12px;
+  cursor: pointer;
+  padding: 8px 0;
+}
+.version-history p {
+  font-size: 12px;
+}
+.run-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: -6px 0 20px;
+  padding: 12px 14px;
+  background: #f7f9f8;
+  border: 1px solid #e5ece7;
+  border-radius: 8px;
+}
+.run-metrics span {
+  font-size: 10px;
+  color: #63766d;
+}
+.run-metrics strong {
+  display: block;
+  color: #304d40;
+  font-size: 14px;
+  margin-top: 5px;
+  font-variant-numeric: tabular-nums;
+}
+.snapshot-hint {
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  color: #806328;
+  background: #fff9e8;
+  border-radius: 6px;
+  line-height: 1.7;
+}
+.tool-list > details {
+  border: 1px solid #dfe8e2;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+.tool-list > details > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 14px;
+  cursor: pointer;
+}
+.tool-list summary code {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.tool-list summary > span:not(.badge) {
+  font-size: 10px;
+  color: #6c7d74;
+  margin-left: auto;
+}
+.tool-list .trace-payload {
+  padding: 0 16px 12px;
+}
+.tool-list .trace-payload > small {
+  overflow-wrap: anywhere;
+  color: #697c72;
+}
+.tool-list .trace-payload > p {
+  font-size: 11px;
+  margin: 12px 0 6px;
+  color: #64756c;
+}
+.audit-search {
+  margin: 0 24px 18px;
+  max-width: 440px;
+}
+.filter-tabs {
+  flex-wrap: wrap;
+}
+.result-tabs {
+  overflow-x: auto;
+}
+.result-tabs button {
+  flex-shrink: 0;
+}
+.session-notice {
+  position: fixed;
+  z-index: 30;
+  inset: 0 0 auto;
+  padding: 12px;
+  background: #fff8df;
+  text-align: center;
+  font-size: 13px;
+  color: #6e5d32;
+}
+@media (max-width: 760px) {
+  .ticket-actions {
+    padding: 12px 16px;
+    gap: 12px;
+  }
+  .ticket-history {
+    margin-inline: 16px;
+  }
+  .workspace-toolbar {
+    align-items: flex-start;
+    font-size: 11px;
+  }
+  .workspace-toolbar > span {
+    max-width: 190px;
+    line-height: 1.7;
+  }
+  .run-metrics {
+    gap: 5px;
+    padding: 10px;
+  }
+  .run-metrics strong {
+    font-size: 13px;
+  }
+  .result-tabs {
+    gap: 0;
+  }
+  .result-tabs button {
+    font-size: 11px;
+    padding-inline: 10px;
+  }
+}

@@ -8,8 +8,9 @@ import secrets
 import sqlite3
 import threading
 import time
+from typing import Literal
 
-from fastapi import Depends, FastAPI, Header, Request
+from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -17,8 +18,8 @@ from starlette.exceptions import HTTPException
 
 from .agent import AgentWorkflow
 from .config import Settings
-from .db import Database, approval_json, audit, dumps, now, order_json, ticket_json, uid
-from .models import Decision, Login, RunCreate, TicketCreate
+from .db import Database, approval_json, audit, dumps, event_json, now, order_json, ticket_event, ticket_json, uid
+from .models import Decision, KnowledgePublish, Login, RunCreate, TicketCreate, TicketTransition, TicketUpdate
 from .security import password_hash, token_hash, verify_password
 
 
@@ -42,17 +43,22 @@ def create_app(settings: Settings | None = None):
         with database.connect(write=True) as con:
             for row in con.execute("SELECT * FROM runs WHERE status='running'").fetchall():
                 payload = json.loads(row["payload"])
-                payload.update(status="failed", completedAt=now(), error={"code": "PROCESS_INTERRUPTED", "message": "服务在上次运行中重启。该运行已保留为失败记录，请使用新的运行键重试。"})
+                payload.update(status="failed", completedAt=now(), terminationReason="process_interrupted", error={"code": "PROCESS_INTERRUPTED", "message": "服务在上次运行中重启。该运行已保留为失败记录，请使用新的运行键重试。"})
                 for step in payload["steps"]:
                     if step["status"] == "running":
                         step.update(status="failed", completedAt=now(), output={"error": "PROCESS_INTERRUPTED"})
+                for call in payload.get("toolCalls", []):
+                    if call["status"] == "running":
+                        call.update(status="failed", completedAt=now(), output={"error": "PROCESS_INTERRUPTED"})
                 con.execute("UPDATE runs SET status='failed',payload=? WHERE id=?", (dumps(payload), row["id"]))
-                audit(con, {"tenantId": row["tenant_id"], "id": "system", "name": "CaseDesk recovery"}, "agent.interrupted", "run", row["id"], {"reason": "PROCESS_INTERRUPTED"})
+                recovery_user = {"tenantId": row["tenant_id"], "id": "system", "name": "CaseDesk recovery"}
+                audit(con, recovery_user, "agent.interrupted", "run", row["id"], {"reason": "PROCESS_INTERRUPTED"})
+                ticket_event(con, recovery_user, row["ticket_id"], "agent.interrupted", {"runId": row["id"], "reason": "PROCESS_INTERRUPTED"})
         yield
 
-    app = FastAPI(title="CaseDesk · Auditable Service Agent", version="1.0.0", description="A local multi-tenant support workflow. Deterministic demo provider by default. Refunds are local ledger entries, never real payments. All currency uses integer cents. Single-worker SQLite deployment.", lifespan=lifespan)
+    app = FastAPI(title="CaseDesk · Auditable Service Agent", version="2.0.0", description="A local multi-tenant support workflow. Deterministic demo provider by default. Refunds are local ledger entries, never real payments. All currency uses integer cents. Single-worker SQLite deployment.", lifespan=lifespan)
     app.state.db, app.state.workflow, app.state.settings = database, workflow, settings
-    app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:4173", "http://127.0.0.1:4173", "http://localhost:3000"], allow_methods=["GET", "POST"], allow_headers=["Authorization", "Content-Type"])
+    app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:4173", "http://127.0.0.1:4173", "http://localhost:3000"], allow_methods=["GET", "POST", "PATCH"], allow_headers=["Authorization", "Content-Type"])
 
     @app.middleware("http")
     async def limit_body(request: Request, call_next):
@@ -105,6 +111,29 @@ def create_app(settings: Settings | None = None):
         if not row:
             raise APIError(404, "TICKET_NOT_FOUND", "找不到该工单")
         return row
+
+    def mutable_ticket(con, ticket_id, user, expected_version):
+        row = ticket_row(con, ticket_id, user)
+        if row["version"] != expected_version:
+            raise APIError(409, "VERSION_CONFLICT", "工单已被更新，请刷新后重试")
+        if con.execute("SELECT 1 FROM runs WHERE ticket_id=? AND tenant_id=? AND status='running'", (ticket_id, user["tenantId"])).fetchone():
+            raise APIError(409, "RUN_IN_PROGRESS", "运行中的工单不可修改或变更状态")
+        if con.execute("SELECT 1 FROM approvals WHERE ticket_id=? AND tenant_id=? AND status='pending'", (ticket_id, user["tenantId"])).fetchone():
+            raise APIError(409, "PENDING_APPROVAL", "请先由独立审批人处理待审批方案，再修改工单")
+        return row
+
+    def document_row(con, document_id, user):
+        row = con.execute("SELECT * FROM documents WHERE id=? AND tenant_id=?", (document_id, user["tenantId"])).fetchone()
+        if not row:
+            raise APIError(404, "DOCUMENT_NOT_FOUND", "找不到该知识文档")
+        return row
+
+    def document_json(con, row, user):
+        chunks = [{"id": chunk["id"], "text": chunk["text"], "version": chunk["version"]} for chunk in con.execute("SELECT * FROM chunks WHERE document_id=? AND tenant_id=? AND version=? ORDER BY id", (row["id"], user["tenantId"], row["version"]))]
+        return {"id": row["id"], "title": row["title"], "version": row["version"], "body": row["body"], "updatedAt": row["updated_at"], "category": row["category"], "chunks": chunks, "bodyEditable": row["category"] != "refund", "publicationPolicy": "server-controlled-refund-policy" if row["category"] == "refund" else "reviewer-managed-guidance"}
+
+    def literal_like(value):
+        return "%" + value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
     @app.get("/api/health")
     def health():
@@ -170,10 +199,18 @@ def create_app(settings: Settings | None = None):
         return {"items": [order_json(row) for row in rows]}
 
     @app.get("/api/tickets")
-    def tickets(user=Depends(current_user)):
+    def tickets(q: str = Query(default="", max_length=180), status: Literal["open", "awaiting_approval", "resolved", "rejected"] | None = None, limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0, le=100000), user=Depends(current_user)):
+        where, params = "tenant_id=?", [user["tenantId"]]
+        if q.strip():
+            where += " AND (subject LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR customer_name LIKE ? ESCAPE '\\' OR COALESCE(order_id,'') LIKE ? ESCAPE '\\' OR id LIKE ? ESCAPE '\\')"
+            params += [literal_like(q.strip())] * 5
+        if status:
+            where += " AND status=?"
+            params.append(status)
         with database.connect() as con:
-            rows = con.execute("SELECT * FROM tickets WHERE tenant_id=? ORDER BY created_at DESC LIMIT 500", (user["tenantId"],)).fetchall()
-        return {"items": [ticket_json(row) for row in rows]}
+            total = con.execute(f"SELECT COUNT(*) FROM tickets WHERE {where}", params).fetchone()[0]
+            rows = con.execute(f"SELECT * FROM tickets WHERE {where} ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?", [*params, limit, offset]).fetchall()
+        return {"items": [ticket_json(row) for row in rows], "total": total, "limit": limit, "offset": offset}
 
     @app.post("/api/tickets", status_code=201)
     def create_ticket(payload: TicketCreate, user=Depends(current_user)):
@@ -181,8 +218,51 @@ def create_app(settings: Settings | None = None):
         with database.connect(write=True) as con:
             if payload.orderId and not con.execute("SELECT id FROM orders WHERE id=? AND tenant_id=?", (payload.orderId, user["tenantId"])).fetchone():
                 raise APIError(404, "ORDER_NOT_FOUND", "找不到该订单")
-            con.execute("INSERT INTO tickets VALUES(?,?,?,?,?,?,?,?,?,?,NULL)", (ticket_id, user["tenantId"], user["id"], payload.subject, payload.description, payload.customerName, payload.orderId, "open", created, created))
+            con.execute("INSERT INTO tickets(id,tenant_id,created_by,subject,description,customer_name,order_id,status,created_at,updated_at,latest_run_id) VALUES(?,?,?,?,?,?,?,?,?,?,NULL)", (ticket_id, user["tenantId"], user["id"], payload.subject, payload.description, payload.customerName, payload.orderId, "open", created, created))
             audit(con, user, "ticket.created", "ticket", ticket_id, {"orderId": payload.orderId})
+            ticket_event(con, user, ticket_id, "ticket.created", {"orderId": payload.orderId})
+            ticket = ticket_json(ticket_row(con, ticket_id, user))
+        return {"ticket": ticket}
+
+    @app.patch("/api/tickets/{ticket_id}")
+    def update_ticket(ticket_id: str, payload: TicketUpdate, user=Depends(current_user)):
+        with database.connect(write=True) as con:
+            row = mutable_ticket(con, ticket_id, user, payload.expectedVersion)
+            if row["status"] != "open":
+                raise APIError(409, "TICKET_STATE_CONFLICT", "仅待处理工单可以补充或修改资料；已结案工单请先重新打开")
+            values = {"subject": row["subject"], "description": row["description"], "orderId": row["order_id"]}
+            for field in payload.model_fields_set - {"expectedVersion", "note"}:
+                values[field] = getattr(payload, field)
+            if payload.note:
+                values["description"] += "\n\n补充信息：" + payload.note
+            if len(values["description"]) > 8000:
+                raise APIError(422, "DESCRIPTION_TOO_LONG", "补充后的工单描述不得超过 8000 字符，请整理描述后重试")
+            if values["orderId"] and not con.execute("SELECT 1 FROM orders WHERE id=? AND tenant_id=?", (values["orderId"], user["tenantId"])).fetchone():
+                raise APIError(404, "ORDER_NOT_FOUND", "找不到该订单")
+            before = {"subject": row["subject"], "description": row["description"], "orderId": row["order_id"]}
+            changes = {key: {"before": before[key], "after": value} for key, value in values.items() if before[key] != value}
+            if not changes:
+                raise APIError(422, "NO_CHANGES", "工单内容没有变化")
+            con.execute("UPDATE tickets SET subject=?,description=?,order_id=?,version=version+1,updated_at=? WHERE id=? AND tenant_id=?", (values["subject"], values["description"], values["orderId"], now(), ticket_id, user["tenantId"]))
+            detail = {"changes": changes, "note": payload.note}
+            ticket_event(con, user, ticket_id, "ticket.updated", detail)
+            audit(con, user, "ticket.updated", "ticket", ticket_id, detail)
+            ticket = ticket_json(ticket_row(con, ticket_id, user))
+        return {"ticket": ticket}
+
+    @app.post("/api/tickets/{ticket_id}/transition")
+    def transition_ticket(ticket_id: str, payload: TicketTransition, user=Depends(current_user)):
+        with database.connect(write=True) as con:
+            row = mutable_ticket(con, ticket_id, user, payload.expectedVersion)
+            valid = row["status"] == "open" if payload.action == "resolve" else row["status"] in {"resolved", "rejected"}
+            if not valid:
+                raise APIError(409, "TICKET_STATE_CONFLICT", "当前工单状态不允许该操作")
+            status = "resolved" if payload.action == "resolve" else "open"
+            con.execute("UPDATE tickets SET status=?,version=version+1,updated_at=? WHERE id=? AND tenant_id=?", (status, now(), ticket_id, user["tenantId"]))
+            action = "ticket.resolved" if payload.action == "resolve" else "ticket.reopened"
+            detail = {"fromStatus": row["status"], "toStatus": status, "reason": payload.reason}
+            ticket_event(con, user, ticket_id, action, detail)
+            audit(con, user, action, "ticket", ticket_id, detail)
             ticket = ticket_json(ticket_row(con, ticket_id, user))
         return {"ticket": ticket}
 
@@ -192,7 +272,8 @@ def create_app(settings: Settings | None = None):
             ticket = ticket_json(ticket_row(con, ticket_id, user))
             runs = [json.loads(row[0]) for row in con.execute("SELECT payload FROM runs WHERE ticket_id=? AND tenant_id=? ORDER BY rowid DESC", (ticket_id, user["tenantId"]))]
             approvals = [approval_json(row) for row in con.execute("SELECT * FROM approvals WHERE ticket_id=? AND tenant_id=? ORDER BY created_at DESC", (ticket_id, user["tenantId"]))]
-        return {"ticket": ticket, "runs": runs, "approvals": approvals}
+            history = [event_json(row) for row in con.execute("SELECT * FROM ticket_events WHERE ticket_id=? AND tenant_id=? ORDER BY id DESC", (ticket_id, user["tenantId"]))]
+        return {"ticket": ticket, "runs": runs, "approvals": approvals, "history": history}
 
     @app.post("/api/tickets/{ticket_id}/runs")
     def run_agent(ticket_id: str, payload: RunCreate = RunCreate(), user=Depends(current_user)):
@@ -209,10 +290,11 @@ def create_app(settings: Settings | None = None):
             if con.execute("SELECT id FROM runs WHERE ticket_id=? AND tenant_id=? AND status='running'", (ticket_id, user["tenantId"])).fetchone():
                 raise APIError(409, "RUN_IN_PROGRESS", "该工单已有运行中的任务")
             run_id = uid("run")
-            run = {"id": run_id, "ticketId": ticket_id, "status": "running", "provider": settings.provider, "demoMode": settings.provider == "demo", "createdAt": now(), "completedAt": None, "answer": "", "evidence": [], "proposal": None, "steps": [], "approvalId": None, "error": None}
+            run = {"id": run_id, "ticketId": ticket_id, "ticketVersion": ticket["version"], "status": "running", "provider": settings.provider, "demoMode": settings.provider == "demo", "createdAt": now(), "completedAt": None, "answer": "", "evidence": [], "proposal": None, "steps": [], "approvalId": None, "error": None}
             con.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?)", (run_id, user["tenantId"], ticket_id, user["id"], key, "running", dumps(run)))
-            con.execute("UPDATE tickets SET latest_run_id=?,updated_at=? WHERE id=? AND tenant_id=?", (run_id, now(), ticket_id, user["tenantId"]))
+            con.execute("UPDATE tickets SET latest_run_id=?,version=version+1,updated_at=? WHERE id=? AND tenant_id=?", (run_id, now(), ticket_id, user["tenantId"]))
             audit(con, user, "agent.started", "run", run_id, {"ticketId": ticket_id, "provider": settings.provider})
+            ticket_event(con, user, ticket_id, "agent.started", {"runId": run_id, "ticketVersion": ticket["version"]})
         return {"run": workflow.execute(run_id, ticket, user), "idempotentReplay": False}
 
     @app.get("/api/runs/{run_id}")
@@ -251,7 +333,7 @@ def create_app(settings: Settings | None = None):
             decided_at = now()
             if payload.decision == "approve":
                 order = con.execute("SELECT * FROM orders WHERE id=? AND tenant_id=?", (row["order_id"], user["tenantId"])).fetchone()
-                if not order or not order["return_eligible"] or order["status"] != "delivered" or not 0 <= order["delivery_days"] <= 30:
+                if not order or not order["return_eligible"] or order["status"] != "delivered" or not 0 <= order_json(order)["deliveryDays"] <= 30:
                     raise APIError(409, "ORDER_INELIGIBLE", "订单当前状态不满足退款条件")
                 amount = row["amount_cents"]
                 if amount > 50000 or amount > order["amount_cents"] - order["refunded_cents"]:
@@ -270,8 +352,9 @@ def create_app(settings: Settings | None = None):
                 audit(con, user, "refund.simulated", "refund", refund["id"], {"approvalId": approval_id, "orderId": row["order_id"], "amountCents": amount, "simulated": True})
             status = "approved" if payload.decision == "approve" else "rejected"
             con.execute("UPDATE approvals SET status=?,decided_at=?,decided_by=?,decision_reason=? WHERE id=? AND tenant_id=?", (status, decided_at, user["id"], payload.reason, approval_id, user["tenantId"]))
-            con.execute("UPDATE tickets SET status=?,updated_at=? WHERE id=? AND tenant_id=?", ("resolved" if status == "approved" else "rejected", decided_at, row["ticket_id"], user["tenantId"]))
+            con.execute("UPDATE tickets SET status=?,version=version+1,updated_at=? WHERE id=? AND tenant_id=?", ("resolved" if status == "approved" else "rejected", decided_at, row["ticket_id"], user["tenantId"]))
             audit(con, user, f"approval.{status}", "approval", approval_id, {"reason": payload.reason, "amountCents": row["amount_cents"]})
+            ticket_event(con, user, row["ticket_id"], f"approval.{status}", {"approvalId": approval_id, "reason": payload.reason, "amountCents": row["amount_cents"]})
             approval = approval_json(con.execute("SELECT * FROM approvals WHERE id=? AND tenant_id=?", (approval_id, user["tenantId"])).fetchone())
             response = {"approval": approval, "refund": refund}
             con.execute("INSERT INTO decisions VALUES(?,?,?,?)", (user["tenantId"], payload.idempotencyKey, request_hash, dumps(response)))
@@ -281,17 +364,58 @@ def create_app(settings: Settings | None = None):
     def knowledge(user=Depends(current_user)):
         with database.connect() as con:
             rows = con.execute("SELECT * FROM documents WHERE tenant_id=? ORDER BY title", (user["tenantId"],)).fetchall()
-            result = []
-            for row in rows:
-                chunks = [{"id": chunk["id"], "text": chunk["text"], "version": chunk["version"]} for chunk in con.execute("SELECT * FROM chunks WHERE document_id=? AND tenant_id=? AND version=? ORDER BY id", (row["id"], user["tenantId"], row["version"]))]
-                result.append({"id": row["id"], "title": row["title"], "version": row["version"], "body": row["body"], "updatedAt": row["updated_at"], "category": row["category"], "chunks": chunks})
+            result = [document_json(con, row, user) for row in rows]
         return {"items": result}
 
-    @app.get("/api/audit")
-    def get_audit(user=Depends(current_user)):
+    @app.get("/api/knowledge/{document_id}/history")
+    def knowledge_history(document_id: str, user=Depends(current_user)):
         with database.connect() as con:
-            rows = con.execute("SELECT * FROM audit WHERE tenant_id=? ORDER BY id DESC LIMIT 500", (user["tenantId"],)).fetchall()
-        return {"items": [{"id": row["id"], "action": row["action"], "actorId": row["actor_id"], "actorName": row["actor_name"], "entityType": row["entity_type"], "entityId": row["entity_id"], "detail": json.loads(row["detail"]), "createdAt": row["created_at"]} for row in rows]}
+            document = document_row(con, document_id, user)
+            items = []
+            for row in con.execute("SELECT * FROM document_versions WHERE document_id=? AND tenant_id=? ORDER BY version DESC", (document_id, user["tenantId"])):
+                chunks = [{"id": chunk["id"], "text": chunk["text"], "version": chunk["version"]} for chunk in con.execute("SELECT * FROM chunks WHERE document_id=? AND tenant_id=? AND version=? ORDER BY id", (document_id, user["tenantId"], row["version"]))]
+                items.append({"documentId": document_id, "version": row["version"], "title": row["title"], "category": row["category"], "body": row["body"], "publishedAt": row["published_at"], "publishedBy": row["published_by"], "reason": row["reason"], "chunks": chunks, "isCurrent": row["version"] == document["version"]})
+        return {"items": items, "currentVersion": document["version"]}
+
+    @app.post("/api/knowledge/{document_id}/publish", status_code=201)
+    def publish_knowledge(document_id: str, payload: KnowledgePublish, user=Depends(current_user)):
+        if user["role"] != "reviewer":
+            raise APIError(403, "REVIEWER_REQUIRED", "只有审批人可以发布知识版本")
+        with database.connect(write=True) as con:
+            row = document_row(con, document_id, user)
+            if row["version"] != payload.expectedVersion:
+                raise APIError(409, "VERSION_CONFLICT", "知识版本已更新，请刷新后重新编辑")
+            if row["category"] == "refund" and payload.body != row["body"]:
+                raise APIError(422, "REFUND_POLICY_SERVER_CONTROLLED", "退款正文与服务端金额、资格和审批规则绑定；此界面仅可修改标题。策略变更需要代码审查与测试后发布")
+            if row["title"] == payload.title and row["body"] == payload.body:
+                raise APIError(422, "NO_CHANGES", "知识内容没有变化")
+            version, published = row["version"] + 1, now()
+            # Chunking is owned by the server, with a fixed 600-character limit.
+            paragraphs = [part.strip() for part in payload.body.split("\n\n") if part.strip()]
+            chunks = [part[i:i + 600] for part in paragraphs for i in range(0, len(part), 600)]
+            if len(chunks) > 32:
+                raise APIError(422, "TOO_MANY_CHUNKS", "文档分段超过 32 段，请合并过短段落")
+            con.execute("INSERT INTO document_versions VALUES(?,?,?,?,?,?,?,?,?)", (document_id, user["tenantId"], version, payload.title, row["category"], payload.body, published, user["id"], payload.reason))
+            for index, content in enumerate(chunks, 1):
+                con.execute("INSERT INTO chunks VALUES(?,?,?,?,?)", (f"{document_id}:v{version}:{index}", user["tenantId"], document_id, version, content))
+            con.execute("UPDATE documents SET title=?,body=?,version=?,updated_at=? WHERE id=? AND tenant_id=?", (payload.title, payload.body, version, published, document_id, user["tenantId"]))
+            audit(con, user, "knowledge.published", "document", document_id, {"fromVersion": row["version"], "toVersion": version, "reason": payload.reason, "category": row["category"]})
+            document = document_json(con, document_row(con, document_id, user), user)
+        return {"document": document}
+
+    @app.get("/api/audit")
+    def get_audit(q: str = Query(default="", max_length=180), status: str | None = Query(default=None, max_length=50, pattern=r"^[a-z_]+$"), limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0, le=100000), user=Depends(current_user)):
+        where, params = "tenant_id=?", [user["tenantId"]]
+        if q.strip():
+            where += " AND (action LIKE ? ESCAPE '\\' OR actor_name LIKE ? ESCAPE '\\' OR entity_id LIKE ? ESCAPE '\\' OR detail LIKE ? ESCAPE '\\')"
+            params += [literal_like(q.strip())] * 4
+        if status:
+            where += " AND substr(action,instr(action,'.')+1)=?"
+            params.append(status)
+        with database.connect() as con:
+            total = con.execute(f"SELECT COUNT(*) FROM audit WHERE {where}", params).fetchone()[0]
+            rows = con.execute(f"SELECT * FROM audit WHERE {where} ORDER BY id DESC LIMIT ? OFFSET ?", [*params, limit, offset]).fetchall()
+        return {"items": [{"id": row["id"], "action": row["action"], "actorId": row["actor_id"], "actorName": row["actor_name"], "entityType": row["entity_type"], "entityId": row["entity_id"], "detail": json.loads(row["detail"]), "createdAt": row["created_at"]} for row in rows], "total": total, "limit": limit, "offset": offset}
 
     return app
 

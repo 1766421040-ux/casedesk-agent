@@ -11,19 +11,50 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
+import type { Order } from "../api";
+import { TicketActions } from "./TicketActions";
 import type { TicketDetailData } from "../types";
 import { date, money } from "../lib/format";
 import { stageNames } from "../lib/labels";
 import { Badge, Empty, Json } from "./ui";
 
+const terminationLabels: Record<string, string> = {
+  proposal_submitted: "方案已提交",
+  final_response: "最终结构化方案已提交",
+  insufficient_evidence: "证据不足，转交人工",
+  injection_flagged: "检测到越权指令",
+  policy_rejected: "方案未通过规则校验",
+  proposal_rejected: "提案未通过规则校验",
+  tool_budget_exceeded: "达到工具调用上限",
+  round_budget_exceeded: "达到模型请求上限",
+  timeout: "达到运行时限",
+  provider_or_workflow_failed: "模型或工作流异常",
+  invalid_tool_arguments: "工具参数不合规",
+  unknown_tool: "请求了未授权工具",
+  order_scope_denied: "订单不属于此工单",
+  invalid_tool_call_id: "调用标识不合规",
+  duplicate_tool_call_id: "调用标识重复",
+  invalid_tool_call: "工具调用格式错误",
+  invalid_provider_response: "模型协议不合规",
+  ambiguous_submission: "提案与读取调用混在同一批次",
+};
+
 export function TicketDetail({
   detail,
+  token,
+  orders,
+  onChanged,
+  runDisabled,
   running,
   onRun,
   isReviewer,
   onApproval,
 }: {
   detail: TicketDetailData;
+  token: string;
+  orders: Order[];
+  onChanged: () => Promise<void>;
+  runDisabled: boolean;
   running: boolean;
   onRun: () => void;
   isReviewer: boolean;
@@ -35,8 +66,16 @@ export function TicketDetail({
   const run =
     detail.runs.find((r) => r.id === runId) ||
     detail.runs.find((r) => r.id === t.latestRunId) ||
-    detail.runs[detail.runs.length - 1];
-  const canRun = t.status === "open" && !isReviewer;
+    detail.runs[0];
+  const activeRun = detail.runs.some((r) => r.status === "running");
+  const canRun = t.status === "open" && !isReviewer && !activeRun;
+  const inputChanged =
+    run &&
+    detail.history?.some(
+      (h) =>
+        h.action === "ticket.updated" &&
+        h.ticketVersion > (run.ticketVersion ?? 0),
+    );
   return (
     <>
       <div className="detail-heading">
@@ -50,7 +89,7 @@ export function TicketDetail({
             客户 <strong>{t.customerName}</strong>
           </span>
           <span>
-            订单 <strong>{t.orderId}</strong>
+            订单 <strong>{t.orderId || "未关联"}</strong>
           </span>
           <span>
             创建于 <strong>{date(t.createdAt)}</strong>
@@ -61,6 +100,13 @@ export function TicketDetail({
           <p>{t.description}</p>
         </div>
       </div>
+      <TicketActions
+        detail={detail}
+        token={token}
+        orders={orders}
+        busy={running}
+        onChanged={onChanged}
+      />
       <div className="agent-heading">
         <div>
           <span className="sparkle-box">
@@ -75,7 +121,7 @@ export function TicketDetail({
         </div>
         <button
           className="primary small"
-          disabled={running || !canRun}
+          disabled={runDisabled || !canRun}
           onClick={onRun}
         >
           {running ? (
@@ -90,7 +136,9 @@ export function TicketDetail({
         <p className="read-only-hint">
           {isReviewer
             ? "主管可查看处理记录，请到审批中心复核方案。"
-            : "此工单已进入审批或结案状态，处理记录以只读方式保留。"}
+            : activeRun
+              ? "此工单已有运行中的任务，正在同步处理记录。"
+              : "此工单已进入审批或结案状态，处理记录以只读方式保留。"}
         </p>
       )}
       {running && (
@@ -154,11 +202,43 @@ export function TicketDetail({
                 <span>RUN · {run.id.slice(-8)}</span>
               )}
             </div>
+            {run.id !== t.latestRunId && (
+              <div className="snapshot-hint">
+                正在查看历史运行；此记录不会随当前工单修改而变化。
+              </div>
+            )}
+            {run.ticketVersion !== undefined && inputChanged && (
+              <div className="snapshot-hint">
+                此方案基于工单 v{run.ticketVersion}。当前为 v{t.version}
+                ，请结合工单记录复核。
+              </div>
+            )}
+            {run.metrics && (
+              <div className="run-metrics">
+                <span>
+                  耗时{" "}
+                  <strong>{(run.metrics.durationMs / 1000).toFixed(2)}s</strong>
+                </span>
+                <span>
+                  模型请求 <strong>{run.metrics.providerCalls}</strong>
+                </span>
+                <span>
+                  工具调用 <strong>{run.metrics.toolCalls}</strong>
+                </span>
+                <span>
+                  已报告 Token{" "}
+                  <strong>
+                    {run.metrics.tokenUsage?.total_tokens ?? "未报告"}
+                  </strong>
+                </span>
+              </div>
+            )}
             <div className="result-tabs">
               {[
                 ["answer", "处理方案"],
                 ["evidence", `引用证据 ${run.evidence.length}`],
                 ["trace", `执行轨迹 ${run.steps.length}`],
+                ["tools", `工具调用 ${run.toolCalls?.length ?? 0}`],
               ].map(([v, l]) => (
                 <button
                   key={v}
@@ -220,7 +300,7 @@ export function TicketDetail({
                       <div>
                         <span className="citation-number">{i + 1}</span>
                         <h4>{e.title}</h4>
-                        <span className="version">{e.version}</span>
+                        <span className="version">v{e.version}</span>
                       </div>
                       <p>{e.text}</p>
                       <footer>
@@ -231,6 +311,48 @@ export function TicketDetail({
                   ))
                 ) : (
                   <Empty text="未检索到足够依据，系统不应据此执行退款。" />
+                )}
+              </div>
+            )}
+            {tab === "tools" && (
+              <div className="tool-list">
+                <p className="trace-footnote">
+                  {run.provider === "demo"
+                    ? "演示策略通过工具边界执行，无真实模型请求。"
+                    : "包含工作流预检和模型主动调用；仅允许读取当前工单的数据并提交方案。"}
+                </p>
+                {run.toolCalls?.length ? (
+                  run.toolCalls.map((call, index) => (
+                    <details key={`${call.id}:${index}`}>
+                      <summary>
+                        <code>{call.name}</code>
+                        <span>
+                          {call.source === "model"
+                            ? "模型选择"
+                            : call.source === "demo"
+                              ? "演示策略"
+                              : "工作流预检"}
+                        </span>
+                        <Badge status={call.status} />
+                      </summary>
+                      <div className="trace-payload">
+                        <small>CALL · {call.id}</small>
+                        <p>参数</p>
+                        <Json value={call.arguments} />
+                        <p>结果</p>
+                        <Json value={call.output} />
+                      </div>
+                    </details>
+                  ))
+                ) : (
+                  <Empty text="此运行没有工具调用记录" />
+                )}
+                {run.terminationReason && (
+                  <p className="trace-footnote">
+                    停止原因：
+                    {terminationLabels[run.terminationReason] ||
+                      run.terminationReason}
+                  </p>
                 )}
               </div>
             )}

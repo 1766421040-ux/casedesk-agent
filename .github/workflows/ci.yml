@@ -48,3 +48,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker compose build
+      - run: docker compose up -d --wait
+      - run: python3 scripts/container-smoke.py
+      - run: docker compose restart backend
+      - run: python3 scripts/container-smoke.py --verify
+      - if: failure()
+        run: docker compose logs --no-color
+      - if: always()
+        run: docker compose down --volumes

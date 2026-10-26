@@ -455,3 +455,172 @@ test("390px 移动端登录、工作台、弹窗及各主页面无文档级横�
     contentType: "image/png",
   });
 });
+
+test("补充工单后重新运行保留历史，可结案并重新打开", async ({ page }) => {
+  const session = await login(page, "agent@harbor.demo");
+  const subject = uniqueSubject("E2E 补充处理闭环");
+  const ticket = await createTicket(
+    page,
+    subject,
+    "请问寄往冰岛的国际运费和进口关税是多少？",
+    "HARBOR-1004",
+  );
+  const first = await runAgent(page, ticket.id);
+  expect(first.proposal.action).toBe("abstain");
+  await page.getByRole("button", { name: "补充 / 修改", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "补充与修改工单" });
+  await dialog
+    .getByLabel("问题描述", { exact: true })
+    .fill("客户改为咨询境内配送，请查询关联订单的物流状态。");
+  await dialog
+    .getByLabel("追加信息（可选）")
+    .fill("已核实订单编号，客户只需配送进度。");
+  await dialog.getByRole("button", { name: "保存修改" }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.locator(".customer-message")).toContainText(
+    "已核实订单编号",
+  );
+  const response = page.waitForResponse(
+    (r) =>
+      new URL(r.url()).pathname === `/api/tickets/${ticket.id}/runs` &&
+      r.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "重新运行", exact: true }).click();
+  const second = (await (await response).json()).run;
+  expect(second.proposal.action).toBe("reply");
+  await expect(page.getByLabel("历史运行")).toBeVisible();
+  await page.getByRole("button", { name: /^工具调用/ }).click();
+  await expect(page.locator(".tool-list")).toContainText("search_policies");
+  await expect(page.locator(".tool-list")).toContainText("lookup_order");
+  await expect(page.locator(".tool-list")).toContainText("submit_proposal");
+  await page.getByLabel("历史运行").selectOption(first.id);
+  await page.getByRole("button", { name: "处理方案", exact: true }).click();
+  await expect(page.locator(".snapshot-hint").first()).toContainText(
+    "历史运行",
+  );
+  await expect(page.locator(".answer-text")).toContainText("没有足够相关证据");
+  await page.getByRole("button", { name: "人工结案", exact: true }).click();
+  const close = page.getByRole("dialog", { name: "人工结案", exact: true });
+  await close
+    .getByLabel("处理说明")
+    .fill("已电话告知客户物流状态，人工结束本次咨询。");
+  await close.getByRole("button", { name: "确认结案" }).click();
+  await expect(page.locator(".detail-kicker .badge")).toHaveText("已完成");
+  await page.getByRole("button", { name: "重新打开", exact: true }).click();
+  const reopen = page.getByRole("dialog", { name: "重新打开工单" });
+  await reopen.getByLabel("处理说明").fill("客户再次咨询，继续处理物流问题。");
+  await reopen.getByRole("button", { name: "确认重新打开" }).click();
+  await expect(page.locator(".detail-kicker .badge")).toHaveText("待处理");
+  const detail = await getJSON(page, `/tickets/${ticket.id}`, session);
+  expect(detail.runs).toHaveLength(2);
+  expect(detail.history.map((e: { action: string }) => e.action)).toEqual(
+    expect.arrayContaining([
+      "ticket.updated",
+      "ticket.resolved",
+      "ticket.reopened",
+    ]),
+  );
+});
+
+test("规则发布保留旧版本，客服仅查看且新运行使用新内容", async ({ page }) => {
+  await login(page, "reviewer@harbor.demo");
+  await navigate(page, "规则知识库");
+  const card = page
+    .locator(".knowledge-card")
+    .filter({ hasText: "harbor-shipping" });
+  await card.getByRole("button", { name: "发布新版本" }).click();
+  const dialog = page.getByRole("dialog", { name: "发布规则新版本" });
+  await dialog
+    .getByLabel("规则正文")
+    .fill(
+      "境内物流配送预计需要7–9个工作日。订单发货后可查询物流状态；延误请转人工联系承运商。",
+    );
+  await dialog
+    .getByLabel("发布说明")
+    .fill("演示更新物流时效，并保留旧版供历史审计。");
+  await dialog.getByRole("button", { name: "确认发布" }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(card.locator(".version")).toHaveText("v2");
+  await card.getByRole("button", { name: "版本历史" }).click();
+  await expect(card.locator(".version-history > details")).toHaveCount(2);
+  await logout(page);
+  await login(page, "agent@harbor.demo");
+  await navigate(page, "规则知识库");
+  await expect(page.getByRole("button", { name: "发布新版本" })).toHaveCount(0);
+  await navigate(page, "工单工作台");
+  const ticket = await createTicket(
+    page,
+    uniqueSubject("E2E 新物流版本"),
+    "请查询订单物流状态及境内配送预计时效。",
+    "HARBOR-1004",
+  );
+  const run = await runAgent(page, ticket.id);
+  expect(
+    run.evidence.some((e: { version: number }) => e.version === 2),
+  ).toBeTruthy();
+  await expect(page.locator(".answer-text")).toContainText("7–9");
+});
+
+test("修改版本冲突不会覆盖外部更新，并支持加载最新版本", async ({ page }) => {
+  const session = await login(page, "agent@harbor.demo");
+  const ticket = await createTicket(
+    page,
+    uniqueSubject("E2E 并发编辑"),
+    "请查询物流配送状态，客户需要了解进度。",
+    "HARBOR-1004",
+  );
+  await page.getByRole("button", { name: "补充 / 修改", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "补充与修改工单" });
+  await dialog
+    .getByLabel("问题描述", { exact: true })
+    .fill("当前页面准备保存的旧版本描述内容。");
+  const external = await page.request.patch(`/api/tickets/${ticket.id}`, {
+    headers: { Authorization: `Bearer ${session.token}` },
+    data: {
+      expectedVersion: ticket.version,
+      note: "其他客服已补充最新配送信息。",
+    },
+  });
+  expect(external.status()).toBe(200);
+  await dialog.getByRole("button", { name: "保存修改" }).click();
+  await expect(dialog.getByRole("alert")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "保存修改" })).toBeDisabled();
+  await dialog.getByRole("button", { name: "加载最新工单后重新编辑" }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.locator(".customer-message")).toContainText(
+    "其他客服已补充",
+  );
+  await expect(page.locator(".customer-message")).not.toContainText(
+    "准备保存的旧版本",
+  );
+});
+
+test("服务器搜索与分页覆盖队列之外的数据，失效会话回到登录页", async ({
+  page,
+}) => {
+  const session = await login(page, "agent@harbor.demo");
+  const subject = uniqueSubject("E2E 分页定位");
+  for (let i = 0; i < 22; i++) {
+    const result = await page.request.post("/api/tickets", {
+      headers: { Authorization: `Bearer ${session.token}` },
+      data: {
+        subject: `${subject} ${i}`,
+        description: "用于验证服务端分页检索的物流咨询。",
+        customerName: "分页客户",
+      },
+    });
+    expect(result.status()).toBe(201);
+  }
+  await page.getByLabel("搜索工单").fill(subject);
+  await expect(page.getByLabel("工单分页")).toContainText("1–20 / 22 条");
+  await expect(page.locator(".ticket-list .ticket-card")).toHaveCount(20);
+  await page.getByRole("button", { name: "工单下一页" }).click();
+  await expect(page.getByLabel("工单分页")).toContainText("21–22 / 22 条");
+  await expect(page.locator(".ticket-list .ticket-card")).toHaveCount(2);
+  await page.request.post("/api/auth/logout", {
+    headers: { Authorization: `Bearer ${session.token}` },
+  });
+  await page.getByRole("button", { name: "刷新数据" }).click();
+  await expect(page.getByRole("heading", { name: "进入工作台" })).toBeVisible();
+  await expect(page.getByRole("status")).toContainText("登录已失效");
+});

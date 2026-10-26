@@ -18,6 +18,7 @@ import {
   Terminal,
   X,
   XCircle,
+  RefreshCw,
 } from "lucide-react";
 import {
   api,
@@ -27,11 +28,15 @@ import {
   type Order,
   type Stats,
   type Ticket,
+  type PageResult,
+  type Run,
 } from "./api";
 import type { Session, TicketDetailData } from "./types";
 import { Login } from "./components/Login";
 import { TicketDetail } from "./components/TicketDetail";
 import { ApprovalCard } from "./components/ApprovalCard";
+import { KnowledgePanel } from "./components/KnowledgePanel";
+import { Pagination } from "./components/Pagination";
 import { CreateTicket } from "./components/CreateTicket";
 import { Badge, Empty, Json, Stat } from "./components/ui";
 import { date, money } from "./lib/format";
@@ -40,6 +45,53 @@ type Page = "tickets" | "approvals" | "knowledge" | "audit";
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
+  const [expired, setExpired] = useState(false);
+  useEffect(() => {
+    function onExpired(event: Event) {
+      if ((event as CustomEvent).detail === session?.token) {
+        setSession(null);
+        setExpired(true);
+      }
+    }
+    window.addEventListener("casedesk:session-expired", onExpired);
+    return () =>
+      window.removeEventListener("casedesk:session-expired", onExpired);
+  }, [session]);
+  if (!session)
+    return (
+      <>
+        {expired && (
+          <div className="session-notice" role="status">
+            登录已失效，请重新登录。已保存的工单不受影响。
+          </div>
+        )}
+        <Login
+          onLogin={(s) => {
+            setExpired(false);
+            setSession(s);
+          }}
+        />
+      </>
+    );
+  return (
+    <Workspace
+      key={session.token}
+      session={session}
+      onLogout={() => {
+        void api("/auth/logout", session.token, {}).catch(() => {});
+        setSession(null);
+      }}
+    />
+  );
+}
+
+function Workspace({
+  session,
+  onLogout,
+}: {
+  session: Session;
+  onLogout: () => void;
+}) {
   const [page, setPage] = useState<Page>("tickets");
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -57,88 +109,184 @@ export default function App() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
-  const [running, setRunning] = useState(false);
+  const [runningTicket, setRunningTicket] = useState<string | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [auditTotal, setAuditTotal] = useState(0);
+  const [auditOffset, setAuditOffset] = useState(0);
+  const [auditQuery, setAuditQuery] = useState("");
+  const [search, setSearch] = useState("");
+  const [auditSearch, setAuditSearch] = useState("");
+  const [revision, setRevision] = useState(0);
+  const listSequence = useRef(0);
+  const selectedRef = useRef<string | null>(null);
+  selectedRef.current = selected;
+  const runKeys = useRef<Record<string, string>>({});
+  const knownRuns = useRef<Record<string, string>>({});
+  const PAGE_SIZE = 20;
   const [showCreate, setShowCreate] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
   const detailSequence = useRef(0);
-  const token = session?.token;
-  async function refresh() {
-    if (!token) return;
-    const [ts, st, ap, kn, au] = await Promise.all([
-      api<{ items: Ticket[] }>("/tickets", token),
-      api<Stats>("/stats", token),
-      api<{ items: Approval[] }>("/approvals", token),
-      api<{ items: Knowledge[] }>("/knowledge", token),
-      api<{ items: Audit[] }>("/audit", token),
-    ]);
-    setTickets(ts.items);
-    setStats(st);
-    setApprovals(ap.items);
-    setKnowledge(kn.items);
-    setAudit(au.items);
-    if (!selected && ts.items.length) setSelected(ts.items[0].id);
-  }
+  const filtersRef = useRef({
+    search,
+    filter,
+    offset,
+    auditSearch,
+    auditOffset,
+  });
+  filtersRef.current = { search, filter, offset, auditSearch, auditOffset };
+  const token = session.token;
   useEffect(() => {
-    if (!token) return;
+    const timer = setTimeout(() => {
+      setSearch(query.trim());
+      setOffset(0);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [query]);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setAuditSearch(auditQuery.trim());
+      setAuditOffset(0);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [auditQuery]);
+  async function refresh() {
+    const { search, filter, offset, auditSearch, auditOffset } =
+      filtersRef.current;
+    const seq = ++listSequence.current;
     setLoading(true);
-    setError("");
-    refresh()
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-    api<typeof health>("/health")
-      .then(setHealth)
-      .catch(() => {});
-    api<{ items: Order[] }>("/orders", token)
-      .then((x) => setOrders(x.items))
-      .catch(() => {});
-  }, [token]);
-  async function loadDetail(id: string) {
-    const seq = ++detailSequence.current;
-    setDetail(null);
     try {
-      const data = await api<typeof detail>(
-        `/tickets/${encodeURIComponent(id)}`,
-        token,
-      );
-      if (seq === detailSequence.current) setDetail(data);
+      const params = new URLSearchParams({
+        q: search,
+        limit: String(PAGE_SIZE),
+        offset: String(offset),
+      });
+      if (filter !== "all") params.set("status", filter);
+      const [ts, st, ap, kn, au] = await Promise.all([
+        api<PageResult<Ticket>>(`/tickets?${params}`, token),
+        api<Stats>("/stats", token),
+        api<{ items: Approval[] }>("/approvals", token),
+        api<{ items: Knowledge[] }>("/knowledge", token),
+        api<PageResult<Audit>>(
+          `/audit?${new URLSearchParams({ q: auditSearch, limit: String(PAGE_SIZE), offset: String(auditOffset) })}`,
+          token,
+        ),
+      ]);
+      if (seq !== listSequence.current) return;
+      setTickets(ts.items);
+      setTotal(ts.total);
+      setStats(st);
+      setApprovals(ap.items);
+      setKnowledge(kn.items);
+      setAudit(au.items);
+      setAuditTotal(au.total);
+      setSelected((current) => current ?? ts.items[0]?.id ?? null);
+      if (offset > 0 && !ts.items.length)
+        setOffset(Math.max(0, offset - PAGE_SIZE));
+      if (auditOffset > 0 && !au.items.length)
+        setAuditOffset(Math.max(0, auditOffset - PAGE_SIZE));
     } catch (e) {
-      if (seq === detailSequence.current) setError((e as Error).message);
+      if (seq === listSequence.current) setError((e as Error).message);
+    } finally {
+      if (seq === listSequence.current) setLoading(false);
     }
   }
   useEffect(() => {
-    if (selected && token) void loadDetail(selected);
-  }, [selected, token]);
-  function logout() {
-    if (token) void api("/auth/logout", token, {}).catch(() => {});
-    detailSequence.current++;
-    setSession(null);
-    setSelected(null);
-    setDetail(null);
-    setTickets([]);
-    setStats(null);
-    setApprovals([]);
-    setKnowledge([]);
-    setAudit([]);
-    setOrders([]);
-    setHealth(null);
-    setError("");
-    setNotice("");
+    void refresh();
+    return () => {
+      listSequence.current++;
+    };
+  }, [search, filter, offset, auditSearch, auditOffset, revision]);
+  useEffect(() => {
+    const controller = new AbortController();
+    Promise.all([
+      api<NonNullable<typeof health>>("/health", undefined, undefined, {
+        signal: controller.signal,
+      }),
+      api<{ items: Order[] }>("/orders", token, undefined, {
+        signal: controller.signal,
+      }),
+    ])
+      .then(([h, o]) => {
+        setHealth(h);
+        setOrders(o.items);
+      })
+      .catch((e) => {
+        if (e.name !== "AbortError") setError(e.message);
+      });
+    return () => controller.abort();
+  }, [token, revision]);
+  async function loadDetail(id: string, clear = true) {
+    const seq = ++detailSequence.current;
+    if (clear) setDetail(null);
+    setDetailLoading(true);
+    try {
+      const data = await api<TicketDetailData>(
+        `/tickets/${encodeURIComponent(id)}`,
+        token,
+      );
+      if (seq === detailSequence.current && selectedRef.current === id) {
+        setDetail(data);
+        if (
+          knownRuns.current[id] &&
+          data.runs.some(
+            (r) => r.id === knownRuns.current[id] && r.status !== "running",
+          )
+        ) {
+          delete runKeys.current[id];
+          delete knownRuns.current[id];
+        }
+      }
+    } catch (e) {
+      if (seq === detailSequence.current) setError((e as Error).message);
+    } finally {
+      if (seq === detailSequence.current) setDetailLoading(false);
+    }
+  }
+  useEffect(() => {
+    if (selected) void loadDetail(selected);
+    return () => {
+      detailSequence.current++;
+    };
+  }, [selected]);
+  const observedRunning =
+    detail?.runs.some((r) => r.status === "running") ?? false;
+  useEffect(() => {
+    if (!selected || !observedRunning) return;
+    const timer = setInterval(() => {
+      void loadDetail(selected, false);
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [selected, observedRunning]);
+  async function afterMutation(id?: string) {
+    await refresh();
+    if (id && selectedRef.current === id) await loadDetail(id, false);
   }
   async function runAgent() {
-    if (!selected || running) return;
-    setRunning(true);
+    if (!selected || runningTicket) return;
+    const id = selected;
+    setRunningTicket(id);
     setError("");
     setNotice("");
+    runKeys.current[id] ??= crypto.randomUUID();
     try {
-      await api(`/tickets/${selected}/runs`, token, {
-        idempotencyKey: crypto.randomUUID(),
+      const result = await api<{ run: Run }>(`/tickets/${id}/runs`, token, {
+        idempotencyKey: runKeys.current[id],
       });
-      await Promise.all([refresh(), loadDetail(selected)]);
-      setNotice("运行结果已保存，请查看处理方案和执行轨迹。");
+      if (result.run.status !== "running") delete runKeys.current[id];
+      else knownRuns.current[id] = result.run.id;
+      await afterMutation(id);
+      setNotice(
+        result.run.status === "running"
+          ? "此运行仍在进行，正在同步已保存的步骤。"
+          : "运行结果已保存，请查看处理方案和执行轨迹。",
+      );
     } catch (e) {
       setError((e as Error).message);
+      await afterMutation(id);
     } finally {
-      setRunning(false);
+      setRunningTicket(null);
     }
   }
   async function decide(
@@ -154,30 +302,14 @@ export default function App() {
       reason,
       idempotencyKey: key,
     });
-    await refresh();
-    if (selected) await loadDetail(selected);
+    await afterMutation(selectedRef.current ?? undefined);
     setNotice(
       decision === "approve"
         ? "审批通过，模拟退款已写入账本。"
         : "方案已拒绝，审批意见已留档。",
     );
   }
-  if (!session)
-    return (
-      <Login
-        onLogin={(s) => {
-          setSession(s);
-          setPage("tickets");
-        }}
-      />
-    );
-  const filtered = tickets.filter(
-    (t) =>
-      (filter === "all" || t.status === filter) &&
-      `${t.subject} ${t.customerName} ${t.id}`
-        .toLowerCase()
-        .includes(query.toLowerCase()),
-  );
+  const filtered = tickets;
   const nav = [
     { key: "tickets" as Page, label: "工单工作台", icon: Inbox },
     { key: "approvals" as Page, label: "审批中心", icon: FileCheck2 },
@@ -271,7 +403,7 @@ export default function App() {
             className="icon-button"
             aria-label="退出登录"
             title="退出并切换身份"
-            onClick={logout}
+            onClick={onLogout}
           >
             <LogOut size={18} />
           </button>
@@ -286,7 +418,7 @@ export default function App() {
           </div>
           <div className="environment">
             <i />
-            {health?.demoMode === false ? "已连接模型" : "演示模式"}
+            {health ? (health.demoMode ? "演示模式" : "模型模式") : "连接中"}
             <span>合成数据 · 模拟退款</span>
           </div>
         </header>
@@ -303,6 +435,25 @@ export default function App() {
                 新建工单
               </button>
             )}
+          </div>
+          <div className="workspace-toolbar">
+            <span>
+              {session.user.role === "reviewer"
+                ? "审批主管 · 可复核方案与发布规则"
+                : "客服专员 · 可创建、补充与处理工单"}
+            </span>
+            <button
+              className="text-button"
+              onClick={() => {
+                setError("");
+                setRevision((x) => x + 1);
+                if (selected) void loadDetail(selected, false);
+              }}
+              disabled={loading}
+            >
+              <RefreshCw size={14} className={loading ? "spin" : ""} />
+              刷新数据
+            </button>
           </div>
           {error && (
             <div className="error" role="alert">
@@ -356,7 +507,7 @@ export default function App() {
                   <div className="panel-heading">
                     <div>
                       <h2>
-                        待办队列 <span>{tickets.length}</span>
+                        工单队列 <span>{total}</span>
                       </h2>
                       <p>选择工单，查看处理方案</p>
                     </div>
@@ -367,6 +518,7 @@ export default function App() {
                       <Search size={17} />
                       <input
                         aria-label="搜索工单"
+                        maxLength={180}
                         placeholder="搜索工单或客户…"
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
@@ -378,11 +530,15 @@ export default function App() {
                         ["open", "待处理"],
                         ["awaiting_approval", "待审批"],
                         ["resolved", "已完成"],
+                        ["rejected", "已拒绝"],
                       ].map(([v, l]) => (
                         <button
                           key={v}
                           className={filter === v ? "active" : ""}
-                          onClick={() => setFilter(v)}
+                          onClick={() => {
+                            setFilter(v);
+                            setOffset(0);
+                          }}
                         >
                           {l}
                         </button>
@@ -425,6 +581,14 @@ export default function App() {
                       <Empty text="没有符合条件的工单" />
                     )}
                   </div>
+                  <Pagination
+                    total={total}
+                    offset={offset}
+                    limit={PAGE_SIZE}
+                    loading={loading}
+                    onChange={setOffset}
+                    label="工单"
+                  />
                   <div className="queue-footer">
                     <i />
                     全部数据按工作空间隔离
@@ -433,8 +597,13 @@ export default function App() {
                 <div className="detail-panel">
                   {detail ? (
                     <TicketDetail
+                      key={detail.ticket.id}
                       detail={detail}
-                      running={running}
+                      token={token}
+                      orders={orders}
+                      onChanged={() => afterMutation(detail.ticket.id)}
+                      running={runningTicket === detail.ticket.id}
+                      runDisabled={!!runningTicket}
                       onRun={runAgent}
                       isReviewer={session.user.role === "reviewer"}
                       onApproval={() => setPage("approvals")}
@@ -442,7 +611,11 @@ export default function App() {
                   ) : (
                     <Empty
                       text={
-                        selected ? "正在读取工单…" : "创建第一张工单，开始处理"
+                        detailLoading
+                          ? "正在读取工单…"
+                          : selected
+                            ? "工单读取失败，请点击刷新数据重试"
+                            : "创建第一张工单，开始处理"
                       }
                     />
                   )}
@@ -475,47 +648,34 @@ export default function App() {
             </div>
           )}
           {page === "knowledge" && (
-            <>
-              <div className="info-strip">
-                <BookOpen size={20} />
-                <div>
-                  <strong>当前检索范围：{knowledge.length} 份规则文档</strong>
-                  <p>
-                    工单检索按租户过滤，并保留命中片段的版本快照。这里只展示已发布的演示规则。
-                  </p>
-                </div>
-              </div>
-              <div className="knowledge-grid">
-                {knowledge.map((k) => (
-                  <article className="knowledge-card" key={k.id}>
-                    <div className="knowledge-icon">
-                      <BookOpen size={22} />
-                    </div>
-                    <div className="knowledge-header">
-                      <h2>{k.title}</h2>
-                      <span className="version">{k.version}</span>
-                    </div>
-                    <p className="knowledge-body">{k.body}</p>
-                    <footer>
-                      <span>规则 ID · {k.id}</span>
-                      <span>{date(k.updatedAt)}</span>
-                    </footer>
-                  </article>
-                ))}
-              </div>
-            </>
+            <KnowledgePanel
+              items={knowledge}
+              token={token}
+              isReviewer={session.user.role === "reviewer"}
+              onChanged={refresh}
+            />
           )}
           {page === "audit" && (
             <div className="panel">
               <div className="panel-heading">
                 <div>
                   <h2>
-                    操作记录 <span>{audit.length}</span>
+                    操作记录 <span>{auditTotal}</span>
                   </h2>
                   <p>记录来自后端持久化审计表；不触发任何业务重放。</p>
                 </div>
                 <Terminal size={21} />
               </div>
+              <label className="search-box audit-search">
+                <Search size={17} />
+                <input
+                  aria-label="搜索审计记录"
+                  maxLength={180}
+                  placeholder="搜索操作、对象或操作人…"
+                  value={auditQuery}
+                  onChange={(e) => setAuditQuery(e.target.value)}
+                />
+              </label>
               <div className="audit-table">
                 <table>
                   <thead>
@@ -551,6 +711,14 @@ export default function App() {
                 </table>
                 {!audit.length && <Empty text="暂无审计记录" />}
               </div>
+              <Pagination
+                total={auditTotal}
+                offset={auditOffset}
+                limit={PAGE_SIZE}
+                loading={loading}
+                onChange={setAuditOffset}
+                label="审计"
+              />
             </div>
           )}
           <footer className="page-footer">
@@ -566,6 +734,10 @@ export default function App() {
           onClose={() => setShowCreate(false)}
           onCreated={async (t) => {
             setShowCreate(false);
+            setQuery("");
+            setSearch("");
+            setFilter("all");
+            setOffset(0);
             await refresh();
             setSelected(t.id);
             setNotice("工单已创建，可以运行 Agent 生成处理方案。");

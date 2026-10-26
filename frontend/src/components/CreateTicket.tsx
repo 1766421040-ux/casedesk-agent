@@ -16,7 +16,7 @@ export function CreateTicket({
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
   const [customerName, setCustomerName] = useState("");
-  const [orderId, setOrderId] = useState(orders[0]?.id || "");
+  const [orderId, setOrderId] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
@@ -33,7 +33,7 @@ export function CreateTicket({
         subject,
         description,
         customerName,
-        orderId,
+        orderId: orderId || null,
       });
       await onCreated(ticket);
     } catch (e) {
@@ -70,7 +70,8 @@ export function CreateTicket({
           工单标题
           <input
             required
-            maxLength={150}
+            minLength={3}
+            maxLength={180}
             autoFocus
             placeholder="例如：蓝牙耳机存在质量问题，申请退款"
             value={subject}
@@ -82,7 +83,7 @@ export function CreateTicket({
             客户姓名
             <input
               required
-              maxLength={80}
+              maxLength={100}
               value={customerName}
               onChange={(e) => setCustomerName(e.target.value)}
               placeholder="客户称呼"
@@ -91,13 +92,13 @@ export function CreateTicket({
           <label>
             关联订单
             <select
-              required
               value={orderId}
               onChange={(e) => setOrderId(e.target.value)}
             >
+              <option value="">暂不关联订单</option>
               {orders.map((o) => (
                 <option value={o.id} key={o.id}>
-                  {o.id}
+                  {o.id} · {o.customerName}
                 </option>
               ))}
             </select>
@@ -108,7 +109,7 @@ export function CreateTicket({
           <textarea
             required
             minLength={5}
-            maxLength={4000}
+            maxLength={8000}
             rows={5}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
@@ -129,7 +130,7 @@ export function CreateTicket({
           >
             取消
           </button>
-          <button className="primary" disabled={busy || !orders.length}>
+          <button className="primary" disabled={busy}>
             {busy && <LoaderCircle size={16} className="spin" />}创建工单
           </button>
         </div>

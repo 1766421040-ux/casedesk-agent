@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import sqlite3
@@ -40,6 +40,17 @@ CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit BEGIN SELECT
 CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT,'audit is append-only'); END;
 """
 
+WORKFLOW_SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY,applied_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS document_versions(document_id TEXT NOT NULL REFERENCES documents(id),tenant_id TEXT NOT NULL REFERENCES tenants(id),version INTEGER NOT NULL,title TEXT NOT NULL,category TEXT NOT NULL,body TEXT NOT NULL,published_at TEXT NOT NULL,published_by TEXT NOT NULL,reason TEXT NOT NULL,PRIMARY KEY(document_id,version));
+CREATE TABLE IF NOT EXISTS ticket_events(id INTEGER PRIMARY KEY AUTOINCREMENT,ticket_id TEXT NOT NULL REFERENCES tickets(id),tenant_id TEXT NOT NULL REFERENCES tenants(id),actor_id TEXT NOT NULL,actor_name TEXT NOT NULL,action TEXT NOT NULL,ticket_version INTEGER NOT NULL,detail TEXT NOT NULL,created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS ticket_events_ticket ON ticket_events(tenant_id,ticket_id,id);
+CREATE TRIGGER IF NOT EXISTS ticket_events_no_update BEFORE UPDATE ON ticket_events BEGIN SELECT RAISE(ABORT,'ticket history is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS ticket_events_no_delete BEFORE DELETE ON ticket_events BEGIN SELECT RAISE(ABORT,'ticket history is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS document_versions_no_update BEFORE UPDATE ON document_versions BEGIN SELECT RAISE(ABORT,'document history is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS document_versions_no_delete BEFORE DELETE ON document_versions BEGIN SELECT RAISE(ABORT,'document history is append-only'); END;
+"""
+
 
 class Database:
     def __init__(self, path: str):
@@ -69,8 +80,36 @@ class Database:
         with self.connect() as con:
             con.execute("PRAGMA journal_mode=WAL")
             con.executescript(SCHEMA)
+            con.executescript(WORKFLOW_SCHEMA)
+        self.migrate()
         if seed:
             self.seed()
+
+    def migrate(self):
+        """Add v2 columns atomically. Existing rows, ledgers, sessions and audit survive."""
+        with self.connect(write=True) as con:
+            if con.execute("PRAGMA user_version").fetchone()[0] > 2:
+                raise RuntimeError("Database schema is newer than this application")
+            if not con.execute("SELECT 1 FROM schema_migrations WHERE version=2").fetchone():
+                ticket_columns = {row["name"] for row in con.execute("PRAGMA table_info(tickets)")}
+                order_columns = {row["name"] for row in con.execute("PRAGMA table_info(orders)")}
+                if "version" not in ticket_columns:
+                    con.execute("ALTER TABLE tickets ADD COLUMN version INTEGER NOT NULL DEFAULT 1 CHECK(version>=1)")
+                if "delivered_at" not in order_columns:
+                    con.execute("ALTER TABLE orders ADD COLUMN delivered_at TEXT")
+                # Legacy v1 stored an age, not a date. Anchor that recorded age once;
+                # subsequent restarts never reset an order's return-window clock.
+                timestamp = datetime.now(timezone.utc)
+                for row in con.execute("SELECT id,delivery_days FROM orders WHERE status='delivered' AND delivered_at IS NULL").fetchall():
+                    con.execute("UPDATE orders SET delivered_at=? WHERE id=?", ((timestamp - timedelta(days=row["delivery_days"])).isoformat(), row["id"]))
+                con.execute("INSERT OR IGNORE INTO document_versions SELECT id,tenant_id,version,title,category,body,updated_at,'system','从既有知识库迁移；历史内容以迁移时保存的版本为准' FROM documents")
+                for row in con.execute("SELECT * FROM tickets").fetchall():
+                    ticket_event(con, {"tenantId": row["tenant_id"], "id": "system", "name": "CaseDesk migration"}, row["id"], "ticket.migrated", {"status": row["status"], "reason": "既有工单迁移，早期操作请查看审计记录"})
+                con.execute("INSERT INTO schema_migrations VALUES(2,?)", (now(),))
+                con.execute("PRAGMA user_version=2")
+            # Compatibility for trusted v1 fixtures/importers that update delivery_days.
+            # Normal API writes never accept delivery_days or delivered_at from clients.
+            con.execute("CREATE TRIGGER IF NOT EXISTS legacy_delivery_age_update AFTER UPDATE OF delivery_days ON orders WHEN NEW.delivery_days != OLD.delivery_days BEGIN UPDATE orders SET delivered_at=strftime('%Y-%m-%dT%H:%M:%f+00:00','now',printf('%+d days',-NEW.delivery_days)) WHERE id=NEW.id; END")
 
     def seed(self):
         with self.connect(write=True) as con:
@@ -83,7 +122,8 @@ class Database:
                     con.execute("INSERT INTO users(id,tenant_id,email,name,role,password_hash) VALUES(?,?,?,?,?,?)", (f"{slug}-{role}", slug, f"{role}@{slug}.demo", person, role, password))
                 order_data = [("1001", "张一", "无线降噪耳机", 29900, 7, 1, "delivered"), ("1002", "李二", "便携蓝牙音箱", 15900, 3, 1, "delivered"), ("1003", "王三", "机械键盘", 49900, 45, 0, "delivered"), ("1004", "赵四", "智能手表", 69900, 0, 0, "shipping")]
                 for number, customer, product, amount, days, eligible, status in order_data:
-                    con.execute("INSERT INTO orders VALUES(?,?,?,?,?,?,?,?,?)", (f"{slug.upper()}-{number}", slug, customer, product, amount, 0, days, eligible, status))
+                    delivered_at = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat() if status == "delivered" else None
+                    con.execute("INSERT INTO orders(id,tenant_id,customer_name,product,amount_cents,refunded_cents,delivery_days,return_eligible,status,delivered_at) VALUES(?,?,?,?,?,?,?,?,?,?)", (f"{slug.upper()}-{number}", slug, customer, product, amount, 0, days, eligible, status, delivered_at))
                 docs = [
                     ("refund", "退款与退货政策", "退款 refund 退货 return：已签收 30 天内且订单标记可退货的商品，可申请退款。是否可退以订单系统校验为准，超期订单转人工复核。\n\n退款金额不得超过订单剩余可退金额，单笔最高 50000 分（500 元）。租户演示累计退款预算为 100000 分（1000 元）。所有退款必须由不同于申请人的 reviewer 审批；模型无审批或执行权限。"),
                     ("shipping", "物流与配送说明", "物流 shipping 配送 delivery：正常配送时效为 3–5 个工作日，可使用订单编号查询配送状态。运输途中不可直接确认退款，遇到丢件须由客服人工核实。"),
@@ -93,6 +133,7 @@ class Database:
                 for category, title, body in docs:
                     did = f"{slug}-{category}"
                     con.execute("INSERT INTO documents VALUES(?,?,?,?,?,?,?)", (did, slug, title, 1, category, body, now()))
+                    con.execute("INSERT INTO document_versions VALUES(?,?,?,?,?,?,?,?,?)", (did, slug, 1, title, category, body, now(), "system", "初始演示政策"))
                     for i, paragraph in enumerate(body.split("\n\n"), 1):
                         con.execute("INSERT INTO chunks VALUES(?,?,?,?,?)", (f"{did}:v1:{i}", slug, did, 1, paragraph))
                 for index, subject, description, order in [
@@ -102,7 +143,9 @@ class Database:
                     (4, "咨询国际运费与关税", "请确认寄往冰岛的国际运费和进口税具体是多少，目前没有相关订单。", None),
                 ]:
                     created = now()
-                    con.execute("INSERT INTO tickets VALUES(?,?,?,?,?,?,?,?,?,?,?)", (f"{slug}-ticket-{index}", slug, f"{slug}-agent", subject, description, "演示客户", f"{slug.upper()}-{order}" if order else None, "open", created, created, None))
+                    ticket_id = f"{slug}-ticket-{index}"
+                    con.execute("INSERT INTO tickets(id,tenant_id,created_by,subject,description,customer_name,order_id,status,created_at,updated_at,latest_run_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (ticket_id, slug, f"{slug}-agent", subject, description, "演示客户", f"{slug.upper()}-{order}" if order else None, "open", created, created, None))
+                    ticket_event(con, {"tenantId": slug, "id": "system", "name": "CaseDesk seed"}, ticket_id, "ticket.created", {"source": "demo", "orderId": f"{slug.upper()}-{order}" if order else None})
 
 
 def audit(con, user, action, entity_type, entity_id, detail):
@@ -110,7 +153,16 @@ def audit(con, user, action, entity_type, entity_id, detail):
 
 
 def ticket_json(row):
-    return {"id": row["id"], "subject": row["subject"], "description": row["description"], "customerName": row["customer_name"], "orderId": row["order_id"], "status": row["status"], "createdAt": row["created_at"], "updatedAt": row["updated_at"], "latestRunId": row["latest_run_id"]}
+    return {"id": row["id"], "subject": row["subject"], "description": row["description"], "customerName": row["customer_name"], "orderId": row["order_id"], "status": row["status"], "version": row["version"], "createdAt": row["created_at"], "updatedAt": row["updated_at"], "latestRunId": row["latest_run_id"]}
+
+
+def ticket_event(con, user, ticket_id, action, detail):
+    version = con.execute("SELECT version FROM tickets WHERE id=? AND tenant_id=?", (ticket_id, user["tenantId"])).fetchone()[0]
+    con.execute("INSERT INTO ticket_events(ticket_id,tenant_id,actor_id,actor_name,action,ticket_version,detail,created_at) VALUES(?,?,?,?,?,?,?,?)", (ticket_id, user["tenantId"], user["id"], user["name"], action, version, dumps(detail), now()))
+
+
+def event_json(row):
+    return {"id": row["id"], "action": row["action"], "actorId": row["actor_id"], "actorName": row["actor_name"], "ticketVersion": row["ticket_version"], "detail": json.loads(row["detail"]), "createdAt": row["created_at"]}
 
 
 def approval_json(row):
@@ -118,4 +170,13 @@ def approval_json(row):
 
 
 def order_json(row):
-    return {"id": row["id"], "customerName": row["customer_name"], "product": row["product"], "amountCents": row["amount_cents"], "refundedCents": row["refunded_cents"], "deliveryDays": row["delivery_days"], "returnEligible": bool(row["return_eligible"]), "status": row["status"]}
+    delivered_at = row["delivered_at"]
+    # Missing or future delivery dates cannot create an eligible return window.
+    delivery_days = -1
+    if delivered_at:
+        try:
+            parsed = datetime.fromisoformat(delivered_at.replace("Z", "+00:00"))
+            delivery_days = (datetime.now(timezone.utc) - parsed).days
+        except (ValueError, TypeError):
+            pass
+    return {"id": row["id"], "customerName": row["customer_name"], "product": row["product"], "amountCents": row["amount_cents"], "refundedCents": row["refunded_cents"], "deliveryDays": delivery_days, "deliveredAt": delivered_at, "returnEligible": bool(row["return_eligible"]), "status": row["status"]}

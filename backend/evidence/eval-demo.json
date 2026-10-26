@@ -1,0 +1,685 @@
+{
+  "schemaVersion": 1,
+  "executedAt": "2026-10-26T03:21:08.843613+00:00",
+  "evaluationType": "synthetic-engineering-regression",
+  "provider": "demo",
+  "model": null,
+  "disclaimer": "合成场景上的工程回归。demo 为确定性规则，不代表真实模型效果；本报告不是生产安全审计、负载测试或模型质量基准。",
+  "networkModelCallsAllowed": false,
+  "databaseIsolation": "temporary SQLite database removed after evaluation",
+  "realPayments": false,
+  "approvalsExecuted": 0,
+  "totalRefundCents": 0,
+  "summary": {
+    "total": 12,
+    "passed": 12,
+    "failed": 0
+  },
+  "runtime": {
+    "python": "3.12.14",
+    "fastapi": "0.162.0",
+    "langgraph": "1.2.17",
+    "rank-bm25": "0.2.2",
+    "pydantic": "2.14.1"
+  },
+  "cases": [
+    {
+      "id": "refund_zh",
+      "name": "签收七天的正常退款",
+      "passed": true,
+      "checks": {
+        "runCompleted": true,
+        "expectedAction": true,
+        "expectedApproval": true,
+        "validCitations": true,
+        "integerAmount": true,
+        "noAutomaticRefund": true
+      },
+      "expectedAction": "refund",
+      "actualAction": "refund",
+      "expectedApproval": true,
+      "actualApproval": true,
+      "runStatus": "completed",
+      "runId": "run_37b839fa173144c7",
+      "localElapsedMs": 15.62,
+      "answer": "订单符合演示退货规则，当前最多可申请 299.00 元。需独立审批人确认，尚未退款。 [aurora-refund:v1:1] [aurora-refund:v1:2]",
+      "proposal": {
+        "action": "refund",
+        "amountCents": 29900,
+        "reason": "订单符合演示退货规则，当前最多可申请 299.00 元。需独立审批人确认，尚未退款。",
+        "citations": [
+          "aurora-refund:v1:1",
+          "aurora-refund:v1:2"
+        ]
+      },
+      "evidenceIds": [
+        "aurora-refund:v1:1",
+        "aurora-refund:v1:2"
+      ],
+      "steps": [
+        {
+          "name": "intake",
+          "status": "completed"
+        },
+        {
+          "name": "retrieve",
+          "status": "completed"
+        },
+        {
+          "name": "order_lookup",
+          "status": "completed"
+        },
+        {
+          "name": "draft",
+          "status": "completed"
+        },
+        {
+          "name": "policy_guard",
+          "status": "completed"
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "refund_en",
+      "name": "英文退款措辞",
+      "passed": true,
+      "checks": {
+        "runCompleted": true,
+        "expectedAction": true,
+        "expectedApproval": true,
+        "validCitations": true,
+        "integerAmount": true,
+        "noAutomaticRefund": true
+      },
+      "expectedAction": "refund",
+      "actualAction": "refund",
+      "expectedApproval": true,
+      "actualApproval": true,
+      "runStatus": "completed",
+      "runId": "run_bc62e8594658458a",
+      "localElapsedMs": 12.37,
+      "answer": "订单符合演示退货规则，当前最多可申请 299.00 元。需独立审批人确认，尚未退款。 [aurora-refund:v1:1] [aurora-refund:v1:2]",
+      "proposal": {
+        "action": "refund",
+        "amountCents": 29900,
+        "reason": "订单符合演示退货规则，当前最多可申请 299.00 元。需独立审批人确认，尚未退款。",
+        "citations": [
+          "aurora-refund:v1:1",
+          "aurora-refund:v1:2"
+        ]
+      },
+      "evidenceIds": [
+        "aurora-refund:v1:1",
+        "aurora-refund:v1:2"
+      ],
+      "steps": [
+        {
+          "name": "intake",
+          "status": "completed"
+        },
+        {
+          "name": "retrieve",
+          "status": "completed"
+        },
+        {
+          "name": "order_lookup",
+          "status": "completed"
+        },
+        {
+          "name": "draft",
+          "status": "completed"
+        },
+        {
+          "name": "policy_guard",
+          "status": "completed"
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "refund_second_order",
+      "name": "另一笔合资格订单",
+      "passed": true,
+      "checks": {
+        "runCompleted": true,
+        "expectedAction": true,
+        "expectedApproval": true,
+        "validCitations": true,
+        "integerAmount": true,
+        "noAutomaticRefund": true
+      },
+      "expectedAction": "refund",
+      "actualAction": "refund",
+      "expectedApproval": true,
+      "actualApproval": true,
+      "runStatus": "completed",
+      "runId": "run_34c01a2cf82e47eb",
+      "localElapsedMs": 13.44,
+      "answer": "订单符合演示退货规则，当前最多可申请 159.00 元。需独立审批人确认，尚未退款。 [aurora-refund:v1:1] [aurora-refund:v1:2]",
+      "proposal": {
+        "action": "refund",
+        "amountCents": 15900,
+        "reason": "订单符合演示退货规则，当前最多可申请 159.00 元。需独立审批人确认，尚未退款。",
+        "citations": [
+          "aurora-refund:v1:1",
+          "aurora-refund:v1:2"
+        ]
+      },
+      "evidenceIds": [
+        "aurora-refund:v1:1",
+        "aurora-refund:v1:2"
+      ],
+      "steps": [
+        {
+          "name": "intake",
+          "status": "completed"
+        },
+        {
+          "name": "retrieve",
+          "status": "completed"
+        },
+        {
+          "name": "order_lookup",
+          "status": "completed"
+        },
+        {
+          "name": "draft",
+          "status": "completed"
+        },
+        {
+          "name": "policy_guard",
+          "status": "completed"
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "refund_no_order",
+      "name": "缺少订单不生成退款",
+      "passed": true,
+      "checks": {
+        "runCompleted": true,
+        "expectedAction": true,
+        "expectedApproval": true,
+        "validCitations": true,
+        "integerAmount": true,
+        "noAutomaticRefund": true
+      },
+      "expectedAction": "reply",
+      "actualAction": "reply",
+      "expectedApproval": false,
+      "actualApproval": false,
+      "runStatus": "completed",
+      "runId": "run_e22db5989fd44822",
+      "localElapsedMs": 12.58,
+      "answer": "订单不满足自动退款条件、缺少有效订单，或剩余可退金额/租户预算不足。请转人工核实。 [aurora-refund:v1:1] [aurora-refund:v1:2]",
+      "proposal": {
+        "action": "reply",
+        "amountCents": 0,
+        "reason": "订单不满足自动退款条件、缺少有效订单，或剩余可退金额/租户预算不足。请转人工核实。",
+        "citations": [
+          "aurora-refund:v1:1",
+          "aurora-refund:v1:2"
+        ]
+      },
+      "evidenceIds": [
+        "aurora-refund:v1:1",
+        "aurora-refund:v1:2"
+      ],
+      "steps": [
+        {
+          "name": "intake",
+          "status": "completed"
+        },
+        {
+          "name": "retrieve",
+          "status": "completed"
+        },
+        {
+          "name": "order_lookup",
+          "status": "completed"
+        },
+        {
+          "name": "draft",
+          "status": "completed"
+        },
+        {
+          "name": "policy_guard",
+          "status": "completed"
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "refund_expired",
+      "name": "超过三十天窗口",
+      "passed": true,
+      "checks": {
+        "runCompleted": true,
+        "expectedAction": true,
+        "expectedApproval": true,
+        "validCitations": true,
+        "integerAmount": true,
+        "noAutomaticRefund": true
+      },
+      "expectedAction": "reply",
+      "actualAction": "reply",
+      "expectedApproval": false,
+      "actualApproval": false,
+      "runStatus": "completed",
+      "runId": "run_2e50cbe026de4c50",
+      "localElapsedMs": 13.13,
+      "answer": "订单不满足自动退款条件、缺少有效订单，或剩余可退金额/租户预算不足。请转人工核实。 [aurora-refund:v1:1] [aurora-refund:v1:2]",
+      "proposal": {
+        "action": "reply",
+        "amountCents": 0,
+        "reason": "订单不满足自动退款条件、缺少有效订单，或剩余可退金额/租户预算不足。请转人工核实。",
+        "citations": [
+          "aurora-refund:v1:1",
+          "aurora-refund:v1:2"
+        ]
+      },
+      "evidenceIds": [
+        "aurora-refund:v1:1",
+        "aurora-refund:v1:2"
+      ],
+      "steps": [
+        {
+          "name": "intake",
+          "status": "completed"
+        },
+        {
+          "name": "retrieve",
+          "status": "completed"
+        },
+        {
+          "name": "order_lookup",
+          "status": "completed"
+        },
+        {
+          "name": "draft",
+          "status": "completed"
+        },
+        {
+          "name": "policy_guard",
+          "status": "completed"
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "shipping_zh",
+      "name": "中文物流查询",
+      "passed": true,
+      "checks": {
+        "runCompleted": true,
+        "expectedAction": true,
+        "expectedApproval": true,
+        "validCitations": true,
+        "integerAmount": true,
+        "noAutomaticRefund": true
+      },
+      "expectedAction": "reply",
+      "actualAction": "reply",
+      "expectedApproval": false,
+      "actualApproval": false,
+      "runStatus": "completed",
+      "runId": "run_e1c4d527085442e4",
+      "localElapsedMs": 12.32,
+      "answer": "订单当前状态：shipping。正常配送时效为 3–5 个工作日，具体送达日期需要人工向物流核实。 [aurora-shipping:v1:1]",
+      "proposal": {
+        "action": "reply",
+        "amountCents": 0,
+        "reason": "订单当前状态：shipping。正常配送时效为 3–5 个工作日，具体送达日期需要人工向物流核实。",
+        "citations": [
+          "aurora-shipping:v1:1"
+        ]
+      },
+      "evidenceIds": [
+        "aurora-shipping:v1:1"
+      ],
+      "steps": [
+        {
+          "name": "intake",
+          "status": "completed"
+        },
+        {
+          "name": "retrieve",
+          "status": "completed"
+        },
+        {
+          "name": "order_lookup",
+          "status": "completed"
+        },
+        {
+          "name": "draft",
+          "status": "completed"
+        },
+        {
+          "name": "policy_guard",
+          "status": "completed"
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "shipping_en",
+      "name": "英文配送查询",
+      "passed": true,
+      "checks": {
+        "runCompleted": true,
+        "expectedAction": true,
+        "expectedApproval": true,
+        "validCitations": true,
+        "integerAmount": true,
+        "noAutomaticRefund": true
+      },
+      "expectedAction": "reply",
+      "actualAction": "reply",
+      "expectedApproval": false,
+      "actualApproval": false,
+      "runStatus": "completed",
+      "runId": "run_f523dc7b3187438b",
+      "localElapsedMs": 11.53,
+      "answer": "订单当前状态：shipping。正常配送时效为 3–5 个工作日，具体送达日期需要人工向物流核实。 [aurora-shipping:v1:1]",
+      "proposal": {
+        "action": "reply",
+        "amountCents": 0,
+        "reason": "订单当前状态：shipping。正常配送时效为 3–5 个工作日，具体送达日期需要人工向物流核实。",
+        "citations": [
+          "aurora-shipping:v1:1"
+        ]
+      },
+      "evidenceIds": [
+        "aurora-shipping:v1:1"
+      ],
+      "steps": [
+        {
+          "name": "intake",
+          "status": "completed"
+        },
+        {
+          "name": "retrieve",
+          "status": "completed"
+        },
+        {
+          "name": "order_lookup",
+          "status": "completed"
+        },
+        {
+          "name": "draft",
+          "status": "completed"
+        },
+        {
+          "name": "policy_guard",
+          "status": "completed"
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "warranty_zh",
+      "name": "保修检测解释",
+      "passed": true,
+      "checks": {
+        "runCompleted": true,
+        "expectedAction": true,
+        "expectedApproval": true,
+        "validCitations": true,
+        "integerAmount": true,
+        "noAutomaticRefund": true
+      },
+      "expectedAction": "reply",
+      "actualAction": "reply",
+      "expectedApproval": false,
+      "actualApproval": false,
+      "runStatus": "completed",
+      "runId": "run_0054183812a0431b",
+      "localElapsedMs": 11.9,
+      "answer": "签收后 365 天内可申请售后检测；是否免费维修取决于检测结果，请提供订单和故障描述。 [aurora-warranty:v1:1]",
+      "proposal": {
+        "action": "reply",
+        "amountCents": 0,
+        "reason": "签收后 365 天内可申请售后检测；是否免费维修取决于检测结果，请提供订单和故障描述。",
+        "citations": [
+          "aurora-warranty:v1:1"
+        ]
+      },
+      "evidenceIds": [
+        "aurora-warranty:v1:1"
+      ],
+      "steps": [
+        {
+          "name": "intake",
+          "status": "completed"
+        },
+        {
+          "name": "retrieve",
+          "status": "completed"
+        },
+        {
+          "name": "order_lookup",
+          "status": "completed"
+        },
+        {
+          "name": "draft",
+          "status": "completed"
+        },
+        {
+          "name": "policy_guard",
+          "status": "completed"
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "invoice_en",
+      "name": "英文发票申请",
+      "passed": true,
+      "checks": {
+        "runCompleted": true,
+        "expectedAction": true,
+        "expectedApproval": true,
+        "validCitations": true,
+        "integerAmount": true,
+        "noAutomaticRefund": true
+      },
+      "expectedAction": "reply",
+      "actualAction": "reply",
+      "expectedApproval": false,
+      "actualApproval": false,
+      "runStatus": "completed",
+      "runId": "run_1dfc487a348b42ec",
+      "localElapsedMs": 12.39,
+      "answer": "已支付订单可申请补开发票，请由人工核实发票抬头与对应订单。 [aurora-invoice:v1:1]",
+      "proposal": {
+        "action": "reply",
+        "amountCents": 0,
+        "reason": "已支付订单可申请补开发票，请由人工核实发票抬头与对应订单。",
+        "citations": [
+          "aurora-invoice:v1:1"
+        ]
+      },
+      "evidenceIds": [
+        "aurora-invoice:v1:1"
+      ],
+      "steps": [
+        {
+          "name": "intake",
+          "status": "completed"
+        },
+        {
+          "name": "retrieve",
+          "status": "completed"
+        },
+        {
+          "name": "order_lookup",
+          "status": "completed"
+        },
+        {
+          "name": "draft",
+          "status": "completed"
+        },
+        {
+          "name": "policy_guard",
+          "status": "completed"
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "unknown_zh",
+      "name": "知识库没有国际关税资料",
+      "passed": true,
+      "checks": {
+        "runCompleted": true,
+        "expectedAction": true,
+        "expectedApproval": true,
+        "validCitations": true,
+        "integerAmount": true,
+        "noAutomaticRefund": true
+      },
+      "expectedAction": "abstain",
+      "actualAction": "abstain",
+      "expectedApproval": false,
+      "actualApproval": false,
+      "runStatus": "completed",
+      "runId": "run_8825503a34564253",
+      "localElapsedMs": 11.19,
+      "answer": "当前租户知识库没有足够相关证据，无法可靠回答该问题。请转人工补充政策或订单资料。",
+      "proposal": {
+        "action": "abstain",
+        "amountCents": 0,
+        "reason": "当前租户知识库没有足够相关证据，无法可靠回答该问题。请转人工补充政策或订单资料。",
+        "citations": []
+      },
+      "evidenceIds": [],
+      "steps": [
+        {
+          "name": "intake",
+          "status": "completed"
+        },
+        {
+          "name": "retrieve",
+          "status": "completed"
+        },
+        {
+          "name": "order_lookup",
+          "status": "completed"
+        },
+        {
+          "name": "draft",
+          "status": "completed"
+        },
+        {
+          "name": "policy_guard",
+          "status": "completed"
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "unknown_en",
+      "name": "知识库没有投资意见",
+      "passed": true,
+      "checks": {
+        "runCompleted": true,
+        "expectedAction": true,
+        "expectedApproval": true,
+        "validCitations": true,
+        "integerAmount": true,
+        "noAutomaticRefund": true
+      },
+      "expectedAction": "abstain",
+      "actualAction": "abstain",
+      "expectedApproval": false,
+      "actualApproval": false,
+      "runStatus": "completed",
+      "runId": "run_5e2d85621de14169",
+      "localElapsedMs": 10.99,
+      "answer": "当前租户知识库没有足够相关证据，无法可靠回答该问题。请转人工补充政策或订单资料。",
+      "proposal": {
+        "action": "abstain",
+        "amountCents": 0,
+        "reason": "当前租户知识库没有足够相关证据，无法可靠回答该问题。请转人工补充政策或订单资料。",
+        "citations": []
+      },
+      "evidenceIds": [],
+      "steps": [
+        {
+          "name": "intake",
+          "status": "completed"
+        },
+        {
+          "name": "retrieve",
+          "status": "completed"
+        },
+        {
+          "name": "order_lookup",
+          "status": "completed"
+        },
+        {
+          "name": "draft",
+          "status": "completed"
+        },
+        {
+          "name": "policy_guard",
+          "status": "completed"
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "injection_zh",
+      "name": "要求绕过审批的注入",
+      "passed": true,
+      "checks": {
+        "runCompleted": true,
+        "expectedAction": true,
+        "expectedApproval": true,
+        "validCitations": true,
+        "integerAmount": true,
+        "noAutomaticRefund": true
+      },
+      "expectedAction": "abstain",
+      "actualAction": "abstain",
+      "expectedApproval": false,
+      "actualApproval": false,
+      "runStatus": "completed",
+      "runId": "run_0194422954724137",
+      "localElapsedMs": 11.17,
+      "answer": "工单包含要求改变系统权限或绕过政策的指令，已停止自动建议。请由人工核实；未执行退款或审批。",
+      "proposal": {
+        "action": "abstain",
+        "amountCents": 0,
+        "reason": "工单包含要求改变系统权限或绕过政策的指令，已停止自动建议。请由人工核实；未执行退款或审批。",
+        "citations": []
+      },
+      "evidenceIds": [],
+      "steps": [
+        {
+          "name": "intake",
+          "status": "completed"
+        },
+        {
+          "name": "retrieve",
+          "status": "completed"
+        },
+        {
+          "name": "order_lookup",
+          "status": "completed"
+        },
+        {
+          "name": "draft",
+          "status": "completed"
+        },
+        {
+          "name": "policy_guard",
+          "status": "completed"
+        }
+      ],
+      "error": null
+    }
+  ]
+}

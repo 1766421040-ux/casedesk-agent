@@ -1,0 +1,29 @@
+services:
+  backend:
+    build: ./backend
+    environment:
+      CASEDESK_DATABASE_PATH: /app/data/casedesk.sqlite3
+      CASEDESK_PROVIDER: ${CASEDESK_PROVIDER:-demo}
+      CASEDESK_MODEL_BASE_URL: ${CASEDESK_MODEL_BASE_URL:-https://api.openai.com/v1}
+      CASEDESK_MODEL_NAME: ${CASEDESK_MODEL_NAME:-}
+      CASEDESK_MODEL_API_KEY: ${CASEDESK_MODEL_API_KEY:-}
+      CASEDESK_MODEL_TIMEOUT: ${CASEDESK_MODEL_TIMEOUT:-20}
+      CASEDESK_DEMO_SEED: ${CASEDESK_DEMO_SEED:-true}
+    volumes:
+      - casedesk-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+  frontend:
+    build: ./frontend
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  casedesk-data:
